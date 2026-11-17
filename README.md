@@ -6,9 +6,11 @@ iPhone 앱 조이스틱으로 조종하는 **수동 모드**와, 초음파 센�
 
 > Team 15 · 이기광, 정명훈 (2026.11)
 >
-> 📑 발표 자료: [docs/RTOS_RC_Car_Project.pdf](docs/RTOS_RC_Car_Project.pdf)
+> 📑 발표 자료: [docs/RTOS_RC_Car_Project.pdf](docs/RTOS_RC_Car_Project.pdf) · 🎬 동작 영상: [docs/media/demo.mp4](docs/media/demo.mp4)
 
-<img src="docs/images/car.png" width="320">
+| 차량 | 자율 주행 데모 |
+|:---:|:---:|
+| <img src="docs/images/car.png" height="360"> | <img src="docs/media/demo.gif" height="360"> |
 
 ## System Overview
 
@@ -37,9 +39,11 @@ iPhone 앱 조이스틱으로 조종하는 **수동 모드**와, 초음파 센�
 
 ## 주요 기능
 
+![Functions](docs/images/functions.png)
+
 | 모드 | 동작 |
 |---|---|
-| **Manual** | 조이스틱 각도 → 7방향(전진 · 대각 · 좌우 · 후진), 기울기 0~1 → 속도 0~999, 손을 떼면(20% 미만) 정지, 후진 중에는 대각선 전환 불가 |
+| **Manual** | 조이스틱 각도 → 6방향(전진 · 좌/우 대각 · 좌회전 · 우회전 · 후진), 기울기 0~1 → 속도 0~999, 손을 떼면(20% 미만) 정지, 후진 중에는 대각선 전환 불가 |
 | **Mode Switch** | 앱 B0 버튼을 누를 때마다 AUTO ↔ MANUAL, T0 토글과 `AUTO` / `MANUAL` 문자열도 지원, 전환할 때 모터를 먼저 정지하고 새 모드 시작 |
 | **Auto** | 초음파 3개 순차 측정(정면 → 우 → 좌), 좌우 거리 차이에 비례해 조향(7 cm 이하 차이는 무시), 정면 60 cm부터 조향 추가 · 35 cm 이하 최대, 바퀴 속도 = 기본 400 ± steer, 센서에 붙으면(300 cm 이상) 정지 |
 
@@ -55,10 +59,13 @@ iPhone 앱 조이스틱으로 조종하는 **수동 모드**와, 초음파 센�
 
 | 계층 | 모듈 |
 |---|---|
-| Application | FreeRTOS (CMSIS-OS v1): MotorTask, CommTask, DistanceTask |
-| Service | `comm_task`, `motor_task`, `distance_task`, message (Queue · Mutex) |
-| Driver | `dc_motor`, `HCSR04`, `LCD`, delay (DWT) |
-| HAL | GPIO / EXTI, I2C1, USART2 / 6, TIM3 / TIM11 |
+| Application | `StartMotorTask`, `StartDistanceTask`, `StartCommTask`, `StartDefaultTask`(LCD 초기화) |
+| Service | `motor_task`, `distance_task`, `comm_task`, `message` (Queue · Mutex, 공통 타입) |
+| OS | FreeRTOS Kernel (CMSIS-OS v1): `osMessagePut/Get`, `osMutexWait/Release`, `osDelay`, Scheduler |
+| Driver | `dc_motor`, `HCSR04`, `LCD`, `delay` (DWT) |
+| HAL | TIM3 PWM / GPIO, GPIO / EXTI / TIM11, USART2 / 6, I2C1 |
+
+> Service 계층은 FreeRTOS Kernel API만 호출하고, 하드웨어 접근은 Driver → HAL을 거칩니다.
 
 ### Task & Timing
 
@@ -156,7 +163,7 @@ iPhone 앱 조이스틱으로 조종하는 **수동 모드**와, 초음파 센�
 
 **결론**
 - Comm · Motor · Distance를 FreeRTOS Task로 나누고 Queue와 Mutex로 연결해, 블루투스 수신 중에도 주행과 측정이 끊기지 않음
-- iPhone 앱 조이스틱의 각도와 크기를 7방향과 속도로 바꿔 수동 주행 구현
+- iPhone 앱 조이스틱의 각도와 크기를 6방향과 속도로 바꿔 수동 주행 구현
 - 앱 버튼 하나로 AUTO ↔ MANUAL 전환, 전환할 때 모터를 정지해 안전하게 모드 변경
 
 **고찰**
@@ -168,6 +175,29 @@ iPhone 앱 조이스틱으로 조종하는 **수동 모드**와, 초음파 센�
 - RTOS의 Task 기반 구조로 타이밍 제약에 대한 설계 부담이 줄어, 기능 개발에 더 집중할 수 있었음
 - 여러 Task가 LCD를 함께 쓰면 Mutex 대기가 전체 속도에 영향을 준다는 것을 직접 확인
 - 기능을 나눠 개발할 때 함수 형태와 공유 변수 규칙을 먼저 맞춰야 병합이 수월함
+
+## 소스 구성
+
+```
+Src/
+├── main.c, freertos.c          # Task · Queue · Mutex 생성 (CubeMX 생성 코드 + USER CODE)
+├── gpio.c, i2c.c, tim.c, usart.c, stm32f4xx_it.c ...
+├── ap/
+│   ├── message.c/h             # comm_data_t, commQueue, lcdMutex 공용 선언
+│   └── task/
+│       ├── comm_task/          # USART2('*') · USART6('\n') 수신, J/T/B 명령 파싱
+│       ├── motor_task/         # Stick FSM, Auto 비례 조향 (auto_motor_controller)
+│       ├── distance_task/      # 정면 → 우 → 좌 순차 측정, LCD 2행 출력
+│       └── button_task/        # 보드 버튼 입력 (최종본에서는 Task 루프만 남기고 미사용)
+├── driver/
+│   ├── dc_motor/               # TIM3 PWM + 방향 핀
+│   ├── HCSR04/                 # Trig 출력, Echo EXTI + TIM11 펄스 폭 측정
+│   ├── lcd/                    # TC1602 I2C (0x27)
+│   └── button/
+└── common/delay/               # DWT 기반 µs 지연
+```
+
+> 최종 제출본의 `Src` 폴더만 포함되어 있습니다. CubeMX 헤더(`Inc/`), `.ioc`, `Drivers/` · `Middlewares/`는 STM32CubeIDE에서 Nucleo-F411RE + FreeRTOS(CMSIS v1)로 새 프로젝트를 만들면 생성됩니다.
 
 ## 개발 환경
 
